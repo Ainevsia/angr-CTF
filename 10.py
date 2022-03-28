@@ -1,0 +1,101 @@
+# This level performs the following computations:
+#
+# 1. Get 16 bytes of user input and encrypt it.
+# 2. Save the result of check_equals_AABBCCDDEEFFGGHH (or similar)
+# 3. Get another 16 bytes from the user and encrypt it.
+# 4. Check that it's equal to a predefined password.
+#
+# The ONLY part of this program that we have to worry about is #2. We will be
+# replacing the call to check_equals_ with our own version, using a hook, since
+# check_equals_ will run too slowly otherwise.
+
+
+# 程序只不过是多加了混淆，加入了不可能执行到的BB，ghidra反编译位置是实际执行到的地方，ida不能识别
+
+import angr
+import claripy
+import sys
+
+def main(argv):
+  path_to_binary = './10_angr_simprocedures'
+  project = angr.Project(path_to_binary)
+
+  # Since Angr can handle the initial call to scanf, we can start from the
+  # beginning.
+  initial_state = project.factory.entry_state(
+    add_options = { angr.options.SYMBOL_FILL_UNCONSTRAINED_MEMORY,
+                    angr.options.SYMBOL_FILL_UNCONSTRAINED_REGISTERS}
+  )
+
+  # Hook the address of where check_equals_ is called.
+  # (!)
+  check_equals_called_address = 0x804b3a2
+
+  # The length parameter in angr.Hook specifies how many bytes the execution
+  # engine should skip after completing the hook. This will allow hooks to
+  # replace certain instructions (or groups of instructions). Determine the
+  # instructions involved in calling check_equals_, and then determine how many
+  # bytes are used to represent them in memory. This will be the skip length.
+  # (!)
+  instruction_to_skip_length = 0x0804b3a7-check_equals_called_address
+  @project.hook(check_equals_called_address, length=instruction_to_skip_length)
+  def skip_check_equals_(state):
+    # Determine the address where user input is stored. It is passed as a
+    # parameter of the check_equals_ function. Then, load the string. Reminder:
+    # int check_equals_(char* to_check, int length) { ...
+    user_input_buffer_address = state.regs.ebp-0x1d # :integer, probably hexadecimal
+    user_input_buffer_length = 0x10
+
+    # Reminder: state.memory.load will read the stored value at the address
+    # user_input_buffer_address of byte length user_input_buffer_length.
+    # It will return a bitvector holding the value. This value can either be
+    # symbolic or concrete, depending on what was stored there in the program.
+    user_input_string = state.memory.load(
+      user_input_buffer_address,
+      user_input_buffer_length
+    )
+    
+    # Determine the string this function is checking the user input against.
+    # It's encoded in the name of this function; decompile the program to find
+    # it.
+    check_against_string = 'WXMXMQFENIXLIZMK' # :string
+
+    # gcc uses eax to store the return value, if it is an integer. We need to
+    # set eax to 1 if check_against_string == user_input_string and 0 otherwise.
+    # However, since we are describing an equation to be used by z3 (not to be
+    # evaluated immediately), we cannot use Python if else syntax. Instead, we 
+    # have to use claripy's built in function that deals with if statements.
+    # claripy.If(expression, ret_if_true, ret_if_false) will output an
+    # expression that evaluates to ret_if_true if expression is true and
+    # ret_if_false otherwise.
+    # Think of it like the Python "value0 if expression else value1".
+    state.regs.eax = claripy.If(
+      user_input_string == check_against_string, 
+      claripy.BVV(1, 32), 
+      claripy.BVV(0, 32)
+    )
+
+  simulation = project.factory.simgr(initial_state)
+
+  def is_successful(state):
+    stdout_output = state.posix.dumps(sys.stdout.fileno())
+    return b'Good' in stdout_output
+
+  def should_abort(state):
+    stdout_output = state.posix.dumps(sys.stdout.fileno())
+    return b'Try' in stdout_output
+
+  simulation.explore(find=is_successful, avoid=should_abort)
+
+  if simulation.found:
+    solution_state = simulation.found[0]
+
+    # Since we are allowing Angr to handle the input, retrieve it by printing
+    # the contents of stdin. Use one of the early levels as a reference.
+    solution = solution_state.posix.dumps(sys.stdin.fileno()).decode()
+    print(solution)
+  else:
+    raise Exception('Could not find the solution')
+
+if __name__ == '__main__':
+  main(sys.argv)

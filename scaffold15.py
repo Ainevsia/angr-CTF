@@ -83,23 +83,26 @@ import claripy
 import sys
 
 def main(argv):
-  path_to_binary = argv[1]
+  path_to_binary = '15_angr_arbitrary_read'
   project = angr.Project(path_to_binary)
 
   # You can either use a blank state or an entry state; just make sure to start
   # at the beginning of the program.
   # (!)
-  initial_state = ???
+  initial_state = project.factory.entry_state(
+    add_options = { angr.options.SYMBOL_FILL_UNCONSTRAINED_MEMORY,
+                    angr.options.SYMBOL_FILL_UNCONSTRAINED_REGISTERS}
+  )
 
   # Again, scanf needs to be replaced.
   class ReplacementScanf(angr.SimProcedure):
     # Hint: scanf("%u %20s")
-    def run(self, format_string, ???, ???):
+    def run(self, format_string, f0, f1):
       # %u
-      scanf0 = claripy.BVS('scanf0', ???)
+      scanf0 = claripy.BVS('scanf0', 8*4)
       
       # %20s
-      scanf1 = claripy.BVS('scanf1', ???)
+      scanf1 = claripy.BVS('scanf1', 8*20)
 
       # The bitvector.chop(bits=n) function splits the bitvector into a Python
       # list containing the bitvector in segments of n bits each. In this case,
@@ -113,18 +116,19 @@ def main(argv):
         # copy, paste, or type into your terminal or the web form that checks 
         # your solution.
         # (!)
-        self.state.add_constraints(char >= ???, char <= ???)
-
+        self.state.add_constraints(char >= b'A', char <= b'[')
+      # ********IMPORTANT*********
       # Warning: Endianness only applies to integers. If you store a string in
-      # memory and treat it as a little-endian integer, it will be backwards.
-      scanf0_address = ???
+      # memory and treat it as a little-endian integer, it will be backwards. ********
+      scanf0_address = f0
       self.state.memory.store(scanf0_address, scanf0, endness=project.arch.memory_endness)
-      ...
+      scanf1_address = f1
+      self.state.memory.store(scanf1_address, scanf1)
+      
+      self.state.globals['solution0'] = scanf0
+      self.state.globals['solution1'] = scanf1
 
-      self.state.globals['solution0'] = ???
-      ...
-
-  scanf_symbol = ???  # :string
+  scanf_symbol = '__isoc99_scanf'  # :string
   project.hook_symbol(scanf_symbol, ReplacementScanf())
 
   # We will call this whenever puts is called. The goal of this function is to
@@ -155,7 +159,7 @@ def main(argv):
     # memory address. Remember to use the correct endianness in the future when
     # loading integers; it has been included for you here.
     # (!)
-    puts_parameter = state.memory.load(???, ???, endness=project.arch.memory_endness)
+    puts_parameter = state.memory.load(state.regs.esp+4, 4, endness=project.arch.memory_endness)
 
     # The following function takes a bitvector as a parameter and checks if it
     # can take on more than one value. While this does not necessary tell us we
@@ -163,20 +167,20 @@ def main(argv):
     # bitvector we checked may be controllable by the user.
     # Use it to determine if the pointer passed to puts is symbolic.
     # (!)
-    if state.solver.symbolic(???):
+    if state.solver.symbolic(puts_parameter):
       # Determine the location of the "Good Job." string. We want to print it
       # out, and we will do so by attempting to constrain the puts parameter to
       # equal it. Hint: use 'objdump -s <binary>' to look for the string's
       # address in .rodata.
       # (!)
-      good_job_string_address = ??? # :integer, probably hexadecimal
+      good_job_string_address = 0x444a5a5b # :integer, probably hexadecimal
 
       # Create an expression that will test if puts_parameter equals
       # good_job_string_address. If we add this as a constraint to our solver,
       # it will try and find an input to make this expression true. Take a look
       # at level 08 to remind yourself of the syntax of this.
       # (!)
-      is_vulnerable_expression = ??? # :boolean bitvector expression
+      is_vulnerable_expression = puts_parameter == good_job_string_address # :boolean bitvector expression
 
       # Have Angr evaluate the state to determine if all the constraints can
       # be met, including the one we specified above. If it can be satisfied,
@@ -216,7 +220,7 @@ def main(argv):
     # pointer, the stack diagram above will be incorrect. Therefore, it is
     # recommended that you check for the very beginning of puts.
     # (!)
-    puts_address = ???
+    puts_address = 0x8049090
     if state.addr == puts_address:
       # Return True if we determine this call to puts is exploitable.
       return check_puts(state)
@@ -228,9 +232,11 @@ def main(argv):
 
   if simulation.found:
     solution_state = simulation.found[0]
+    
+    solution0 = solution_state.solver.eval(solution_state.globals['solution0'])
 
-    solution = ???
-    print(solution)
+    solution1 = solution_state.solver.eval(solution_state.globals['solution1'],cast_to=bytes).decode()
+    print(f'''{solution0} {solution1}''')
   else:
     raise Exception('Could not find the solution')
 

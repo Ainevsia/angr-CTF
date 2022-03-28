@@ -28,12 +28,14 @@ import claripy
 import sys
 
 def main(argv):
-  path_to_binary = argv[1]
+  path_to_binary = '17_angr_arbitrary_jump'
   project = angr.Project(path_to_binary)
 
   # Make a symbolic input that has a decent size to trigger overflow
   # (!)
-  symbolic_input = claripy.BVS("input", ???)
+  # i don't know why must +4*5
+  # otherwise angr cannot solve
+  symbolic_input = claripy.BVS("input", 8*(0x22+4+4+4*5))
 
   # Create initial state and set stdin to the symbolic input
   initial_state = project.factory.entry_state(
@@ -52,9 +54,9 @@ def main(argv):
   # (!)
   simulation = project.factory.simgr(
     initial_state,
-    save_unconstrained=???,
+    save_unconstrained=True,
     stashes={
-      'active' : [???],
+      'active' : [initial_state],
       'unconstrained' : [],
       'found' : [],
       'not_needed' : []
@@ -88,46 +90,47 @@ def main(argv):
   # by examining the simulation.unconstrained list.
   # (!)
   def has_unconstrained_to_check():
-    return ???
+    return simulation.unconstrained
 
   # The list simulation.active is a list of all states that can be explored
   # further.
   # (!)
   def has_active():
-    return ???
+    return simulation.active
 
   while (has_active() or has_unconstrained_to_check()) and (not has_found_solution()):
-    for unconstrained_state in simulation.unconstrained:
-        # Look for unconstrained states and move them to the 'found' stash.
-        # A 'stash' should be a string that corresponds to a list that stores
-        # all the states that the state group keeps. Values include:
-        #  'active' = states that can be stepped
-        #  'deadended' = states that have exited the program
-        #  'errored' = states that encountered an error with Angr
-        #  'unconstrained' = states that are unconstrained
-        #  'found' = solutions
-        #  anything else = whatever you want, perhaps you want a 'not_needed',
-        #                  you can call it whatever you want
-        # (!)
-      simulation.move('unconstrained', 'found')
+    # for unconstrained_state in simulation.unconstrained:
+    #     # Look for unconstrained states and move them to the 'found' stash.
+    #     # A 'stash' should be a string that corresponds to a list that stores
+    #     # all the states that the state group keeps. Values include:
+    #     #  'active' = states that can be stepped
+    #     #  'deadended' = states that have exited the program
+    #     #  'errored' = states that encountered an error with Angr
+    #     #  'unconstrained' = states that are unconstrained
+    #     #  'found' = solutions
+    #     #  anything else = whatever you want, perhaps you want a 'not_needed',
+    #     #                  you can call it whatever you want
+    #     # (!)
+    #   simulation.move('unconstrained', 'found', filter_func=lambda x: x is unconstrained_state)
+    simulation.move('unconstrained', 'found')
 
     # Advance the simulation.
     simulation.step()
-
+  print(simulation)
   if simulation.found:
     solution_state = simulation.found[0]
-
+    print('ok')
     # Constrain the instruction pointer to target the print_good function and
     # (!)
-    solution_state.add_constraints(solution_state.regs.eip == ???)
+    solution_state.add_constraints(solution_state.regs.eip == project.loader.find_symbol('print_good').rebased_addr)
 
     # Constrain the symbolic input to fall within printable range (capital
     # letters) for the web UI.  Ensure UTF-8 encoding.
     # (!)
     for byte in symbolic_input.chop(bits=8):
       solution_state.add_constraints(
-              byte >= ???,
-              byte <= ???
+              byte >= b'A',
+              byte <= b'z'
       )
 
     # Solve for the symbolic_input
